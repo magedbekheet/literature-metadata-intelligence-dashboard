@@ -41,7 +41,7 @@ See [docs/SCREENSHOTS.md](docs/SCREENSHOTS.md) for recapturing guidance.
 ## Features
 
 - Search scholarly metadata from OpenAlex and Crossref.
-- Optional Google Scholar local / SerpAPI and Semantic Scholar sources.
+- Optional Google Scholar local / SerpAPI and Semantic Scholar sources, with conservative limits for rate-limited APIs.
 - Import JSON, JSONL, CSV, BibTeX, and RIS files.
 - Deduplicate by DOI, normalized title, year, and author overlap.
 - Library-only metadata enrichment with Fast, Balanced, and Deep modes.
@@ -118,13 +118,29 @@ SEMANTIC_SCHOLAR_API_KEY=your_semantic_scholar_api_key
 OpenAlex = primary large-scale scholarly metadata backend
 Crossref = DOI and journal metadata
 Google Scholar = optional broad discovery/enrichment; may be rate-limited
-Semantic Scholar = optional citation/abstract enrichment
+Semantic Scholar = optional citation/abstract search/enrichment; best with API key
 arXiv = optional preprint source
 Unpaywall = optional open-access/PDF metadata enrichment
 Elsevier = optional ScienceDirect enrichment when an API key is available
 ```
 
 Google Scholar local access uses the `scholarly` package and can be fragile because Google Scholar may rate-limit or show CAPTCHA. SerpAPI is more stable if you have a key.
+
+Semantic Scholar can be used without a key, but anonymous requests are rate-limited and may return HTTP `429`. For reliable use, request a free Semantic Scholar API key and set:
+
+```env
+SEMANTIC_SCHOLAR_API_KEY=your_semantic_scholar_api_key
+```
+
+The app respects Semantic Scholar's introductory limit of about **1 request/second**. Recommended Semantic Scholar search limits are:
+
+```text
+10 records = normal searches
+20-25 records = broader checks
+50 records = maximum; can be slow and may trigger rate limits if repeated
+```
+
+OpenAlex and Crossref are recommended as the primary search sources. Use Semantic Scholar mainly for citation counts, abstracts, and selected metadata enrichment when extra coverage is needed.
 
 ## Import Schema
 
@@ -154,7 +170,7 @@ Metadata enrichment is available from the Library page after saving or importing
 | --- | --- | --- |
 | Fast | Crossref + OpenAlex | First pass, fastest workflow |
 | Balanced | Crossref + OpenAlex + Unpaywall | Adds OA/PDF metadata |
-| Deep | All sources, optional Elsevier and publisher pages | Slow but more exhaustive |
+| Deep | Crossref + OpenAlex + Unpaywall + Semantic Scholar + optional Elsevier/publisher pages | Best for selected missing metadata; slowest |
 
 Recommended fast settings:
 
@@ -164,6 +180,8 @@ Records to enrich: 10-20
 Only rows with missing metadata: checked
 Try publisher URL: off
 ```
+
+Use Deep mode on modest batches when records still need abstracts, citation counts, or PDF links. Semantic Scholar enrichment uses the API key when available and is throttled to about 1 request/second.
 
 ## Analysis Scope
 

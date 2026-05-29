@@ -12,6 +12,27 @@ from .schema import normalize_doi, normalize_paper, safe_text, normalize_title
 
 USER_AGENT = "literature-metadata-dashboard/0.6 (metadata-enrichment; mailto:your_email@example.com)"
 DOI_RE = re.compile(r"\b10\.\d{4,9}/[-._;()/:A-Z0-9]+", re.I)
+SEMANTIC_FIELDS = "title,abstract,authors,year,venue,url,externalIds,publicationDate,citationCount,openAccessPdf,fieldsOfStudy,journal"
+_SEMANTIC_LAST_REQUEST_AT = 0.0
+
+
+def semantic_headers() -> Dict[str, str]:
+    headers = {"User-Agent": USER_AGENT}
+    api_key = os.getenv("SEMANTIC_SCHOLAR_API_KEY")
+    if api_key:
+        headers["x-api-key"] = api_key
+    return headers
+
+
+def semantic_get(url: str, *, params: Dict[str, Any]) -> requests.Response:
+    """Respect Semantic Scholar's 1 request/second limit during enrichment."""
+    global _SEMANTIC_LAST_REQUEST_AT
+    elapsed = time.time() - _SEMANTIC_LAST_REQUEST_AT
+    if elapsed < 1.05:
+        time.sleep(1.05 - elapsed)
+    response = requests.get(url, params=params, headers=semantic_headers(), timeout=20)
+    _SEMANTIC_LAST_REQUEST_AT = time.time()
+    return response
 
 
 def is_missing(value: Any) -> bool:
@@ -269,15 +290,19 @@ def enrich_semantic_by_doi_or_title(doi: str = "", title: str = "") -> Dict[str,
         return {}
     if normalize_doi(doi):
         url = f"https://api.semanticscholar.org/graph/v1/paper/DOI:{normalize_doi(doi)}"
-        params = {"fields": "title,abstract,authors,year,venue,url,externalIds,publicationDate,citationCount,openAccessPdf,fieldsOfStudy,journal"}
-        r = requests.get(url, params=params, headers={"User-Agent": USER_AGENT}, timeout=20)
+        params = {"fields": SEMANTIC_FIELDS}
+        r = semantic_get(url, params=params)
         if r.status_code == 404:
             return {}
+        if r.status_code == 429:
+            raise RuntimeError("Semantic Scholar enrichment rate limit HTTP 429. Deep enrichment is optional; try fewer records later or keep Semantic Scholar for selected missing metadata only.")
         r.raise_for_status()
         item = r.json()
     else:
-        params = {"query": q, "limit": 1, "fields": "title,abstract,authors,year,venue,url,externalIds,publicationDate,citationCount,openAccessPdf,fieldsOfStudy,journal"}
-        r = requests.get("https://api.semanticscholar.org/graph/v1/paper/search", params=params, headers={"User-Agent": USER_AGENT}, timeout=20)
+        params = {"query": q, "limit": 1, "fields": SEMANTIC_FIELDS}
+        r = semantic_get("https://api.semanticscholar.org/graph/v1/paper/search", params=params)
+        if r.status_code == 429:
+            raise RuntimeError("Semantic Scholar enrichment rate limit HTTP 429. Deep enrichment is optional; try fewer records later or keep Semantic Scholar for selected missing metadata only.")
         r.raise_for_status()
         data = r.json().get("data", []) or []
         if not data:

@@ -17,6 +17,26 @@ SEARCH_TIMEOUT = 40
 
 # Lightweight in-process cache to reduce repeated API calls and rate-limit issues.
 _SEMANTIC_CACHE: dict[tuple[str, str, str, int], list[dict]] = {}
+_SEMANTIC_RATE_LIMIT_UNTIL = 0.0
+_SEMANTIC_LAST_REQUEST_AT = 0.0
+
+
+def _semantic_get(url: str, *, params: Dict, headers: Dict) -> requests.Response:
+    """Call Semantic Scholar while respecting the 1 request/second key limit."""
+    global _SEMANTIC_LAST_REQUEST_AT, _SEMANTIC_RATE_LIMIT_UNTIL
+    elapsed = time.time() - _SEMANTIC_LAST_REQUEST_AT
+    if elapsed < 1.05:
+        time.sleep(1.05 - elapsed)
+    response = requests.get(url, params=params, headers=headers, timeout=SEARCH_TIMEOUT)
+    _SEMANTIC_LAST_REQUEST_AT = time.time()
+    if response.status_code == 429:
+        retry_after = response.headers.get("Retry-After")
+        try:
+            wait_seconds = int(retry_after) if retry_after else 300
+        except ValueError:
+            wait_seconds = 300
+        _SEMANTIC_RATE_LIMIT_UNTIL = time.time() + max(wait_seconds, 60)
+    return response
 
 
 
@@ -102,7 +122,14 @@ def search_semantic_scholar(query: str, *, year_from: str = "", year_to: str = "
     if not query:
         return []
 
-    rows = min(max(int(rows), 1), 50)  # keep S2 modest to avoid 429/timeouts
+    global _SEMANTIC_RATE_LIMIT_UNTIL
+    now = time.time()
+    if now < _SEMANTIC_RATE_LIMIT_UNTIL:
+        wait = int(_SEMANTIC_RATE_LIMIT_UNTIL - now)
+        raise RuntimeError(f"Semantic Scholar is temporarily cooling down after HTTP 429. Try again in about {wait} seconds or add SEMANTIC_SCHOLAR_API_KEY.")
+
+    api_key = os.getenv("SEMANTIC_SCHOLAR_API_KEY")
+    rows = min(max(int(rows), 1), 50 if api_key else 10)
     cache_key = (query.lower(), str(year_from), str(year_to), rows)
     if cache_key in _SEMANTIC_CACHE:
         return list(_SEMANTIC_CACHE[cache_key])
@@ -115,12 +142,11 @@ def search_semantic_scholar(query: str, *, year_from: str = "", year_to: str = "
             "query": query,
             "limit": limit,
             "offset": offset,
-            "fields": "title,abstract,authors,year,venue,url,externalIds,publicationDate,citationCount,openAccessPdf,fieldsOfStudy,journal",
+            "fields": "title,abstract,authors,year,venue,url,externalIds,publicationDate,citationCount",
         }
         if year_from or year_to:
             params["year"] = f"{year_from or ''}-{year_to or ''}"
         headers = {"User-Agent": USER_AGENT}
-        api_key = os.getenv("SEMANTIC_SCHOLAR_API_KEY")
         if api_key:
             headers["x-api-key"] = api_key
 
@@ -128,19 +154,22 @@ def search_semantic_scholar(query: str, *, year_from: str = "", year_to: str = "
         data = []
         for attempt in range(3):
             try:
-                r = requests.get("https://api.semanticscholar.org/graph/v1/paper/search", params=params, headers=headers, timeout=SEARCH_TIMEOUT)
+                r = _semantic_get("https://api.semanticscholar.org/graph/v1/paper/search", params=params, headers=headers)
                 if r.status_code == 429:
-                    raise RuntimeError("Semantic Scholar rate limit HTTP 429. Try again later, use fewer results, or add SEMANTIC_SCHOLAR_API_KEY.")
+                    auth_state = "API key detected" if api_key else "no API key detected"
+                    raise RuntimeError(f"Semantic Scholar rate limit HTTP 429 ({auth_state}). Try again later and keep requests below 1 per second.")
                 r.raise_for_status()
                 data = r.json().get("data", []) or []
                 break
             except Exception as exc:
                 last_exc = exc
+                if "HTTP 429" in str(exc):
+                    raise
                 time.sleep(1.5 * (attempt + 1))
         else:
             raise RuntimeError(f"Semantic Scholar request failed after retries: {last_exc}")
 
-        if not data and offset == 0:
+        if api_key and not data and offset == 0:
             # Fallback endpoint sometimes returns results when the paginated search endpoint does not.
             try:
                 bulk_params = {
@@ -150,7 +179,7 @@ def search_semantic_scholar(query: str, *, year_from: str = "", year_to: str = "
                 }
                 if year_from or year_to:
                     bulk_params["year"] = f"{year_from or ''}-{year_to or ''}"
-                rb = requests.get("https://api.semanticscholar.org/graph/v1/paper/search/bulk", params=bulk_params, headers=headers, timeout=SEARCH_TIMEOUT)
+                rb = _semantic_get("https://api.semanticscholar.org/graph/v1/paper/search/bulk", params=bulk_params, headers=headers)
                 if rb.status_code == 200:
                     data = rb.json().get("data", []) or []
             except Exception:
@@ -159,18 +188,16 @@ def search_semantic_scholar(query: str, *, year_from: str = "", year_to: str = "
             break
         for item in data:
             ext = item.get("externalIds") or {}
-            pdf = item.get("openAccessPdf") or {}
-            journal_obj = item.get("journal") or {}
             records.append({
                 "source": "semantic_scholar",
                 "title": safe_text(item.get("title")),
                 "authors": [safe_text(a.get("name")) for a in item.get("authors", [])],
                 "abstract": safe_text(item.get("abstract")),
-                "journal": safe_text(journal_obj.get("name")) or safe_text(item.get("venue")),
+                "journal": safe_text(item.get("venue")),
                 "year": safe_text(item.get("year")),
                 "doi": normalize_doi(ext.get("DOI")),
                 "url": safe_text(item.get("url")),
-                "pdf_url": safe_text(pdf.get("url")) if isinstance(pdf, dict) else "",
+                "pdf_url": "",
                 "keywords": item.get("fieldsOfStudy") or [],
                 "citation_count": item.get("citationCount", ""),
             })
@@ -378,9 +405,14 @@ def _unique_queries(*values: str) -> List[str]:
     out = []
     for value in values:
         value = " ".join(safe_text(value).split())
-        if value and value.lower() not in seen:
-            out.append(value)
-            seen.add(value.lower())
+        candidates = [value]
+        if re.search(r"\bOR\b|\|", value, flags=re.I):
+            candidates.extend(x.strip(" ()") for x in re.split(r"\bOR\b|\|", value, flags=re.I))
+        for candidate in candidates:
+            candidate = " ".join(safe_text(candidate).split())
+            if candidate and candidate.lower() not in seen:
+                out.append(candidate)
+                seen.add(candidate.lower())
     return out
 
 
@@ -405,15 +437,17 @@ def _scholar_record_quality(rec: Dict, strictness: str = "medium") -> bool:
     # strict: keep only records that can be enriched or are already metadata-rich
     return bool(safe_text(rec.get("doi")) or safe_text(rec.get("abstract")) or safe_text(rec.get("journal")))
 
-def search_all(fields: Dict, sources: Dict[str, bool], rows_per_source: int = 25, *, scholar_raw_limit: int | None = None, scholar_strictness: str = "medium") -> List[Dict]:
+def search_all(fields: Dict, sources: Dict[str, bool], rows_per_source: int = 25, *, semantic_rows: int | None = None, scholar_raw_limit: int | None = None, scholar_strictness: str = "medium") -> List[Dict]:
     query = fields.get("global", "")
     title = fields.get("title", "")
     abstract = fields.get("abstract", "")
     author = fields.get("author", "")
     journal = fields.get("journal", "")
+    keywords = fields.get("keywords", "")
+    doi = fields.get("doi", "")
     year_from = fields.get("year_from", "")
     year_to = fields.get("year_to", "")
-    combined = " ".join(x for x in [query, title, abstract, author, journal] if x)
+    combined = " ".join(x for x in [query, title, abstract, author, journal, keywords, doi] if x)
     out: List[Dict] = []
     errors = []
 
@@ -431,8 +465,13 @@ def search_all(fields: Dict, sources: Dict[str, bool], rows_per_source: int = 25
     if sources.get("semantic_scholar", False):
         try:
             records = []
-            for q in _unique_queries(combined, query, title, abstract, author, journal):
-                records = search_semantic_scholar(q, year_from=year_from, year_to=year_to, rows=min(rows_per_source, 50))
+            semantic_limit = min(int(semantic_rows or rows_per_source), 50)
+            semantic_queries = _unique_queries(query, keywords, title, abstract, author, journal, doi, combined)
+            if not os.getenv("SEMANTIC_SCHOLAR_API_KEY"):
+                semantic_limit = min(semantic_limit, 10)
+                semantic_queries = semantic_queries[:2]
+            for q in semantic_queries:
+                records = search_semantic_scholar(q, year_from=year_from, year_to=year_to, rows=semantic_limit)
                 if records:
                     break
             out.extend(records)

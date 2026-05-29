@@ -24,7 +24,7 @@ from app.services.search_sources import search_all
 from app.services.schema import dedupe_papers, dedupe_stats, safe_text
 
 ROOT = Path(__file__).resolve().parent
-load_dotenv(ROOT / ".env")
+load_dotenv(ROOT / ".env", encoding="utf-8-sig")
 STORAGE = ROOT / "storage"
 LIBRARY_FILE = STORAGE / "library" / "papers.jsonl"
 for folder in [LIBRARY_FILE.parent, STORAGE / "exports", STORAGE / "uploads"]:
@@ -220,7 +220,7 @@ def render_save_library_controls(df: pd.DataFrame, prefix: str) -> None:
 
 
 def compact_table(df: pd.DataFrame) -> pd.DataFrame:
-    cols = ["title", "authors_display", "journal", "year", "doi", "source", "citation_count", "url"]
+    cols = ["title", "authors_display", "journal", "year", "doi", "source", "sources", "citation_count", "url"]
     out = norm_df(df)[[c for c in cols if c in df.columns]].copy()
     for c in out.columns:
         out[c] = out[c].map(lambda x: safe_text(x)[:300])
@@ -807,11 +807,50 @@ def safe_slider(label: str, max_value: int, default: int, key: str) -> int:
 
 
 def source_badges(df: pd.DataFrame) -> None:
-    if df.empty or "source" not in df:
+    if df.empty:
         return
-    counts = Counter(df["source"].dropna().astype(str))
-    badge_html = " ".join([f'<span class="badge">{html.escape(k)}: {v}</span>' for k, v in counts.items()])
-    st.markdown(badge_html, unsafe_allow_html=True)
+    label_counts = Counter(df["source"].dropna().astype(str)) if "source" in df else Counter()
+    contributing = Counter()
+    if "sources" in df:
+        for value in df["sources"]:
+            if isinstance(value, list):
+                parts = value
+            else:
+                parts = [x.strip() for x in safe_text(value).split(",")]
+            for part in parts:
+                if part:
+                    contributing[part] += 1
+    if not contributing:
+        contributing = label_counts
+    if label_counts:
+        label_html = " ".join([f'<span class="badge">{html.escape(k)}: {v}</span>' for k, v in label_counts.items()])
+        st.caption("Displayed source labels")
+        st.markdown(label_html, unsafe_allow_html=True)
+    if contributing:
+        contrib_html = " ".join([f'<span class="badge">{html.escape(k)}: {v}</span>' for k, v in contributing.items()])
+        st.caption("Contributing sources after deduplication")
+        st.markdown(contrib_html, unsafe_allow_html=True)
+
+
+def source_contribution_frame(df: pd.DataFrame) -> pd.DataFrame:
+    rows = []
+    if df.empty:
+        return pd.DataFrame(columns=["Source", "Papers"])
+    for _, row in df.iterrows():
+        raw_sources = row.get("sources")
+        if isinstance(raw_sources, list):
+            sources = raw_sources
+        else:
+            sources = [x.strip() for x in safe_text(raw_sources).split(",") if x.strip()]
+        if not sources:
+            sources = [safe_text(row.get("source")) or "Unknown"]
+        for source in sources:
+            rows.append({"Source": safe_text(source) or "Unknown", "paper_id": safe_text(row.get("id")) or str(row.name)})
+    exploded = pd.DataFrame(rows)
+    if exploded.empty:
+        return pd.DataFrame(columns=["Source", "Papers"])
+    out = exploded.groupby("Source")["paper_id"].nunique().reset_index(name="Papers")
+    return out.sort_values("Papers", ascending=False)
 
 
 def render_enrichment(df: pd.DataFrame, session_key: str | None = None, save: bool = False, context: str = "library") -> pd.DataFrame:
@@ -826,11 +865,13 @@ def render_enrichment(df: pd.DataFrame, session_key: str | None = None, save: bo
         mode_help = {
             "Fast": "Crossref + OpenAlex only. Best first pass.",
             "Balanced": "Crossref + OpenAlex + Unpaywall. Good metadata/PDF balance.",
-            "Deep": "All sources, including Semantic Scholar, optional Elsevier, and optional publisher page checks. Slowest.",
+            "Deep": "All sources, including Semantic Scholar. Best for selected missing metadata; slowest because Semantic Scholar is limited to about 1 request/second.",
         }
         c0, c1, c2, c3 = st.columns([1.1, .9, 1, 1])
         enrich_mode = c0.selectbox("Enrichment mode", ["Fast", "Balanced", "Deep"], index=0, key=f"{session_key}_enrich_mode")
         c0.caption(mode_help[enrich_mode])
+        if enrich_mode == "Deep":
+            st.caption("Recommendation: use OpenAlex + Crossref for main search, then use Deep enrichment only for selected records that still need abstracts, citation counts, or PDF links. Keep the batch modest to avoid Semantic Scholar rate limits.")
         default_n = min(20 if enrich_mode == "Fast" else 50, len(df))
         max_records = c1.number_input("Records to enrich", 1, min(500, len(df)), default_n, key=f"{session_key}_enrich_n")
         only_missing = c2.checkbox("Only rows with missing metadata", True, key=f"{session_key}_only_missing")
@@ -939,8 +980,21 @@ def render_search() -> None:
             s1, s2, s3, s4 = st.columns(4)
             use_openalex = s1.checkbox("OpenAlex", True)
             use_crossref = s2.checkbox("Crossref", source_preset in {"Balanced", "Deep"})
-            use_semantic = s3.checkbox("Semantic Scholar enrichment", False, help="Optional and often slower/rate-limited.")
+            use_semantic = s3.checkbox("Semantic Scholar", False, help="Optional and often slower/rate-limited.")
             use_arxiv = s4.checkbox("arXiv", False)
+            semantic_limit = st.number_input(
+                "Semantic Scholar limit",
+                5,
+                50,
+                10,
+                5,
+                help="Recommended: 10 for normal searches, 20-25 for broader checks. 50 is the maximum and may be slow or trigger rate limits because Semantic Scholar allows about 1 request/second.",
+            )
+            if use_semantic:
+                if os.getenv("SEMANTIC_SCHOLAR_API_KEY"):
+                    st.caption("Tip: Semantic Scholar is using SEMANTIC_SCHOLAR_API_KEY from .env. Keep 10 as the normal setting; use 20-25 for broader checks. 50 is only a maximum and may be slow due to the 1 request/second limit.")
+                else:
+                    st.caption("Tip: no SEMANTIC_SCHOLAR_API_KEY was found. The app caps Semantic Scholar to 10 records and pauses after HTTP 429. Add a free API key for better reliability.")
             g1, g2, g3 = st.columns(3)
             use_gs = g1.checkbox("Google Scholar local (experimental)", False, help="Free but fragile. Google may block, rate-limit, CAPTCHA-check automated requests, or return no results.")
             use_serp = g2.checkbox("Google Scholar SerpAPI (stable, requires key)", False, help="Requires SERPAPI_KEY in .env.")
@@ -953,7 +1007,7 @@ def render_search() -> None:
         if not any([q, title_q, abstract_q, author_q, journal_q, keyword_q, doi_q]):
             st.warning("Enter at least one search term.")
             return
-        fields = {"global": q, "title": title_q, "abstract": abstract_q, "author": author_q, "journal": journal_q, "year_from": year_from, "year_to": year_to}
+        fields = {"global": q, "title": title_q, "abstract": abstract_q, "author": author_q, "journal": journal_q, "keywords": keyword_q, "doi": doi_q, "year_from": year_from, "year_to": year_to}
         sources = {"openalex": use_openalex, "crossref": use_crossref, "semantic_scholar": use_semantic, "arxiv": use_arxiv, "google_scholar_scholarly": use_gs, "google_scholar_serpapi": use_serp}
         selected_source_names = [
             name for name, enabled in {
@@ -965,11 +1019,22 @@ def render_search() -> None:
                 "Google Scholar SerpAPI": use_serp,
             }.items() if enabled
         ]
-        st.info(f"Searching {', '.join(selected_source_names) or 'no sources'} for up to {int(rows)} records/source.")
+        source_limits = []
+        for name, enabled, limit in [
+            ("OpenAlex", use_openalex, int(rows)),
+            ("Crossref", use_crossref, int(rows)),
+            ("Semantic Scholar", use_semantic, int(semantic_limit)),
+            ("arXiv", use_arxiv, int(rows)),
+            ("Google Scholar local", use_gs, int(scholar_limit)),
+            ("Google Scholar SerpAPI", use_serp, int(scholar_limit)),
+        ]:
+            if enabled:
+                source_limits.append(f"{name}: up to {limit}")
+        st.info(f"Searching {', '.join(source_limits) if source_limits else 'no sources'}.")
         with st.spinner("Searching selected sources, cleaning records, and merging duplicates..."):
             import time
             t0 = time.perf_counter()
-            raw = search_all(fields, sources, rows_per_source=int(rows), scholar_raw_limit=int(scholar_limit), scholar_strictness=strictness)
+            raw = search_all(fields, sources, rows_per_source=int(rows), semantic_rows=int(semantic_limit), scholar_raw_limit=int(scholar_limit), scholar_strictness=strictness)
             search_seconds = round(time.perf_counter() - t0, 1)
             errors = [r for r in raw if safe_text(r.get("error"))]
             records = [r for r in raw if not safe_text(r.get("error"))]
@@ -980,29 +1045,38 @@ def render_search() -> None:
             st.session_state["active_df"] = df
             st.session_state["search_errors"] = errors
             st.session_state["dedupe_stats"] = dedupe_stats(len(records), deduped)
+            st.session_state["search_raw_source_counts"] = dict(Counter(safe_text(r.get("source")) for r in records if safe_text(r.get("source"))))
+            st.session_state["search_display_source_counts"] = dict(Counter(df["source"].dropna().astype(str))) if "source" in df else {}
             st.session_state["search_runtime_seconds"] = search_seconds
+    search_errors = st.session_state.get("search_errors", [])
+    if search_errors:
+        with st.expander("Advanced source messages", expanded=True):
+            st.warning("Some optional sources were unavailable, rate-limited, or returned an API error.")
+            st.dataframe(pd.DataFrame(search_errors), width="stretch", hide_index=True)
+
     df = st.session_state.get("active_df")
     if isinstance(df, pd.DataFrame) and not df.empty:
         stats = st.session_state.get("dedupe_stats", {})
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("Papers shown", len(df))
-        c2.metric("Unique papers", stats.get("unique_papers", len(df)))
+        c2.metric("Unique before filters", stats.get("unique_papers", len(df)))
         c3.metric("Duplicates merged", stats.get("duplicates_merged", 0))
-        c4.metric("Sources", df["source"].nunique() if "source" in df else 0)
+        c4.metric("Raw records", stats.get("raw_records", len(df)))
         if "search_runtime_seconds" in st.session_state:
             st.caption(f"Latest search runtime: {st.session_state['search_runtime_seconds']} seconds")
         source_badges(df)
+        with st.expander("Search count details", expanded=False):
+            st.write("Raw fetched records by source, before deduplication and filters:")
+            raw_counts = st.session_state.get("search_raw_source_counts", {})
+            st.dataframe(pd.DataFrame([{"source": k, "raw_records": v} for k, v in raw_counts.items()]), width="stretch", hide_index=True)
+            st.write("Displayed records are after deduplication and your field/year filters. Papers found by multiple sources are labeled `merged`, while the contributing-source badges show which sources were merged into those papers.")
         st.dataframe(compact_table(df), width="stretch", hide_index=True, height=440)
         render_save_library_controls(df, "search")
         c2, c3 = st.columns(2)
         c2.download_button("CSV", df.to_csv(index=False), "search_results.csv", "text/csv")
         c3.download_button("JSON", to_json(df), "search_results.json", "application/json")
-        with st.expander("Advanced source messages", expanded=False):
-            errors = st.session_state.get("search_errors", [])
-            if errors:
-                st.warning("Some optional sources were unavailable or rate-limited. Successful sources were still used.")
-                st.dataframe(pd.DataFrame(errors), width="stretch", hide_index=True)
-            else:
+        if not search_errors:
+            with st.expander("Advanced source messages", expanded=False):
                 st.success("No source errors in the latest search.")
 
 
@@ -1432,9 +1506,9 @@ def render_analysis() -> None:
         fig.update_layout(xaxis_title="Year", yaxis_title="Papers", bargap=.12)
         fig.update_xaxes(type="category")
         c1.plotly_chart(fig, width="stretch")
-    src = dfa["source_clean"].value_counts().reset_index()
-    src.columns = ["Source", "Papers"]
-    c2.plotly_chart(px.pie(src, values="Papers", names="Source", title="Source distribution", hole=.38), width="stretch")
+    src = source_contribution_frame(dfa)
+    c2.plotly_chart(px.pie(src, values="Papers", names="Source", title="Contributing source distribution", hole=.38), width="stretch")
+    c2.caption("Source counts are non-exclusive: a merged paper can contribute to multiple sources, so source totals may exceed the number of displayed papers.")
 
     c3, c4 = st.columns(2)
     journals = dfa["journal_clean"].value_counts().head(20).reset_index()
