@@ -100,14 +100,6 @@ py -m pip install -r requirements.txt
 streamlit run app.py
 ```
 
-With pyenv:
-
-```bash
-pyenv activate chemsim
-pip install -r requirements.txt
-streamlit run app.py
-```
-
 ## Optional Environment Variables
 
 Create a `.env` file if needed:
@@ -269,6 +261,18 @@ Ignored local artifacts include:
 - exports/uploads/PDF/vector stores
 
 The app creates local storage folders under `storage/`; sample placeholder files are kept so the folder structure exists in a fresh clone.
+
+## License, Disclaimer, And Liability
+
+This project is distributed under the MIT License. See the repository [LICENSE](LICENSE) file.
+
+This software is provided for research support, metadata exploration, literature screening, and workflow assistance. It is not a substitute for expert scientific judgment, formal systematic-review methodology, legal advice, medical advice, or professional decision-making.
+
+The app relies on third-party scholarly metadata providers and optional local or external AI tools. Search results, metadata enrichment, citation counts, abstracts, links, AI-polished summaries, and exported review text may be incomplete, outdated, inaccurate, duplicated, or unavailable depending on source coverage, API behavior, rate limits, user configuration, and local model behavior.
+
+Users are responsible for verifying all bibliographic records, DOI links, citations, summaries, exported files, and interpretations before using them in publications, reports, grant applications, clinical work, legal work, or other high-stakes contexts.
+
+To the maximum extent permitted by the applicable license and law, the author and contributors are not liable for losses, damages, errors, omissions, or decisions arising from use of this software or generated outputs.
 
 ## Documentation
 
