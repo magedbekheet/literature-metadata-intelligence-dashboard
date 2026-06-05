@@ -106,6 +106,7 @@ Create a `.env` file if needed:
 
 ```env
 OPENALEX_MAILTO=your_email@example.com
+OPENALEX_API_KEY=your_openalex_api_key
 UNPAYWALL_EMAIL=your_email@example.com
 SERPAPI_KEY=your_serpapi_key
 ELSEVIER_API_KEY=your_elsevier_api_key
@@ -125,6 +126,8 @@ Elsevier = optional ScienceDirect enrichment when an API key is available
 ```
 
 Google Scholar local access uses the `scholarly` package and can be fragile because Google Scholar may rate-limit or show CAPTCHA. SerpAPI is more stable if you have a key.
+
+For deployed apps, set `OPENALEX_MAILTO` and `OPENALEX_API_KEY` in Streamlit secrets. OpenAlex documents much tighter unauthenticated limits and free API keys for production use. The app includes `mailto`, `api_key`, light throttling, and clearer HTTP `429` messages when configured.
 
 Semantic Scholar can be used without a key, but anonymous requests are rate-limited and may return HTTP `429`. For reliable use, request a free Semantic Scholar API key and set:
 

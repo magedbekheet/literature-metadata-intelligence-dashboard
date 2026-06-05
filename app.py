@@ -25,6 +25,20 @@ from app.services.schema import dedupe_papers, dedupe_stats, safe_text
 
 ROOT = Path(__file__).resolve().parent
 load_dotenv(ROOT / ".env", encoding="utf-8-sig")
+for secret_name in [
+    "OPENALEX_API_KEY",
+    "OPENALEX_MAILTO",
+    "SEMANTIC_SCHOLAR_API_KEY",
+    "SERPAPI_KEY",
+    "UNPAYWALL_EMAIL",
+    "ELSEVIER_API_KEY",
+]:
+    try:
+        secret_value = safe_text(st.secrets.get(secret_name, ""))
+    except Exception:
+        secret_value = ""
+    if secret_value and not os.getenv(secret_name):
+        os.environ[secret_name] = secret_value
 STORAGE = ROOT / "storage"
 LIBRARY_FILE = STORAGE / "library" / "papers.jsonl"
 for folder in [LIBRARY_FILE.parent, STORAGE / "exports", STORAGE / "uploads"]:

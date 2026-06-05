@@ -19,6 +19,39 @@ SEARCH_TIMEOUT = 40
 _SEMANTIC_CACHE: dict[tuple[str, str, str, int], list[dict]] = {}
 _SEMANTIC_RATE_LIMIT_UNTIL = 0.0
 _SEMANTIC_LAST_REQUEST_AT = 0.0
+_OPENALEX_RATE_LIMIT_UNTIL = 0.0
+_OPENALEX_LAST_REQUEST_AT = 0.0
+
+
+def _openalex_headers() -> Dict[str, str]:
+    mailto = os.getenv("OPENALEX_MAILTO", "").strip()
+    if mailto:
+        return {"User-Agent": f"literature-metadata-dashboard/0.5 (mailto:{mailto})"}
+    return {"User-Agent": USER_AGENT}
+
+
+def _openalex_get(url: str, *, params: Dict) -> requests.Response:
+    """Call OpenAlex politely and surface useful rate-limit state."""
+    global _OPENALEX_LAST_REQUEST_AT, _OPENALEX_RATE_LIMIT_UNTIL
+    now = time.time()
+    if now < _OPENALEX_RATE_LIMIT_UNTIL:
+        wait = int(_OPENALEX_RATE_LIMIT_UNTIL - now)
+        raise RuntimeError(f"OpenAlex is temporarily cooling down after HTTP 429. Try again in about {wait} seconds, or add OPENALEX_API_KEY and OPENALEX_MAILTO in Streamlit secrets.")
+
+    elapsed = time.time() - _OPENALEX_LAST_REQUEST_AT
+    if elapsed < 0.25:
+        time.sleep(0.25 - elapsed)
+
+    response = requests.get(url, params=params, headers=_openalex_headers(), timeout=SEARCH_TIMEOUT)
+    _OPENALEX_LAST_REQUEST_AT = time.time()
+    if response.status_code == 429:
+        retry_after = response.headers.get("Retry-After")
+        try:
+            wait_seconds = int(retry_after) if retry_after else 300
+        except ValueError:
+            wait_seconds = 300
+        _OPENALEX_RATE_LIMIT_UNTIL = time.time() + max(wait_seconds, 60)
+    return response
 
 
 def _semantic_get(url: str, *, params: Dict, headers: Dict) -> requests.Response:
@@ -214,10 +247,13 @@ def search_openalex(query: str, *, title: str = "", author: str = "", journal: s
     q = " ".join(x for x in [query, title, author, journal] if x).strip()
     if not q:
         return []
+    api_key = os.getenv("OPENALEX_API_KEY", "").strip()
+    if not api_key:
+        rows = min(int(rows), 50)
     out = []
     page = 1
     while len(out) < rows:
-        per_page = min(200, rows - len(out))
+        per_page = min(100, rows - len(out))
         filters = []
         if year_from:
             filters.append(f"from_publication_date:{year_from}-01-01")
@@ -229,10 +265,16 @@ def search_openalex(query: str, *, title: str = "", author: str = "", journal: s
             "page": page,
             "sort": "relevance_score:desc",
             "mailto": os.getenv("OPENALEX_MAILTO", ""),
+            "api_key": api_key,
         }
         if filters:
             params["filter"] = ",".join(filters)
-        r = requests.get("https://api.openalex.org/works", params={k: v for k, v in params.items() if v}, headers={"User-Agent": USER_AGENT}, timeout=SEARCH_TIMEOUT)
+        r = _openalex_get("https://api.openalex.org/works", params={k: v for k, v in params.items() if v})
+        if r.status_code == 429:
+            auth_state = "API key detected" if api_key else "no OpenAlex API key detected"
+            remaining = r.headers.get("X-RateLimit-Remaining", "unknown")
+            reset = r.headers.get("X-RateLimit-Reset", "unknown")
+            raise RuntimeError(f"OpenAlex rate limit HTTP 429 ({auth_state}; remaining={remaining}; reset={reset}). Add OPENALEX_API_KEY and OPENALEX_MAILTO in Streamlit secrets, reduce Results/source, or try again later.")
         r.raise_for_status()
         results = r.json().get("results", []) or []
         if not results:
