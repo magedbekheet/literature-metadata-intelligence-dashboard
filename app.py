@@ -29,6 +29,8 @@ for secret_name in [
     "OPENALEX_API_KEY",
     "OPENALEX_MAILTO",
     "SEMANTIC_SCHOLAR_API_KEY",
+    "GROQ_API_KEY",
+    "GEMINI_API_KEY",
     "SERPAPI_KEY",
     "UNPAYWALL_EMAIL",
     "ELSEVIER_API_KEY",
@@ -82,6 +84,19 @@ OLLAMA_MODEL_OPTIONS = [
     "phi3:mini",
 ]
 
+GROQ_MODEL_OPTIONS = [
+    "llama-3.1-8b-instant",
+    "llama-3.3-70b-versatile",
+    "openai/gpt-oss-20b",
+    "qwen/qwen3-32b",
+]
+
+GEMINI_MODEL_OPTIONS = [
+    "gemini-2.5-flash-lite",
+    "gemini-2.5-flash",
+    "gemini-2.0-flash",
+]
+
 
 def style() -> None:
     st.markdown(
@@ -99,6 +114,10 @@ def style() -> None:
         .brand {font-size:.82rem; color:#64748b; margin-top:.5rem;}
         .metric-card {background:white; border:1px solid #e2e8f0; border-radius:18px; padding:1rem; box-shadow:0 6px 20px rgba(15,23,42,.04);}
         .small-note {font-size:.84rem; color:#64748b;}
+        .app-footer {border-top:1px solid #d8e3ea; margin-top:2.6rem; padding:1.2rem 0 1.8rem; display:flex; justify-content:space-between; align-items:center; gap:1rem; flex-wrap:wrap;}
+        .app-footer .credit {color:#334155; font-size:.95rem;}
+        .app-footer .links a {display:inline-block; margin-left:.5rem; padding:.42rem .75rem; border:1px solid #b7d9d6; border-radius:999px; color:#0f4f5c; text-decoration:none; font-weight:650; background:#f7fffd;}
+        .app-footer .links a:hover {background:#e7fbf7;}
         </style>
         """,
         unsafe_allow_html=True,
@@ -117,6 +136,21 @@ def hero() -> None:
             <span class="badge">OpenAlex + Crossref + Scholar + metadata enrichment</span>
           </div>
           <div class="brand">Developed by <b>Maged Bekheet</b> for AI-assisted literature review, materials research intelligence, and scientific metadata analysis.</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def footer() -> None:
+    st.markdown(
+        """
+        <div class="app-footer">
+          <div class="credit">Developed by <b>Dr.-Ing. Maged Bekheet</b></div>
+          <div class="links">
+            <a href="https://github.com/magedbekheet" target="_blank" rel="noopener noreferrer">GitHub</a>
+            <a href="https://de.linkedin.com/in/magedbekheet" target="_blank" rel="noopener noreferrer">LinkedIn</a>
+          </div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -1243,18 +1277,16 @@ def render_insights() -> None:
     with st.expander("Preview narrative review", expanded=False):
         st.markdown(narrative)
 
-    with st.expander("Polish narrative with Ollama", expanded=False):
-        st.caption("Optional AI polishing step. Ollama is local-only by default: it works when this app runs on the same machine as Ollama, or when you provide a reachable Ollama host URL.")
+    with st.expander("AI polish narrative", expanded=False):
+        st.caption("Optional polishing uses selected paper metadata and abstracts only. It does not analyze full PDFs. For cloud providers, use your own API key and avoid confidential or unpublished text.")
         provider = st.selectbox(
             "AI polishing provider",
-            ["Ollama local", "OpenAI API (paid, not connected)", "Gemini API (paid, not connected)"],
+            ["Ollama local", "Groq API (user key)", "Gemini API (user key)"],
             key="ai_polish_provider",
         )
-        if provider != "Ollama local":
-            st.info("This app currently ships with local Ollama polishing only. OpenAI and Gemini can be added later for users who provide paid API keys.")
-            polished = ""
-            cache_key = ""
-        else:
+        polished = ""
+        cache_key = ""
+        if provider == "Ollama local":
             o1, o2, o3 = st.columns([1, 1.4, .8])
             ollama_host = o2.text_input("Ollama host", value="http://localhost:11434", key="ollama_host")
             if ollama_host.startswith("http://localhost") or ollama_host.startswith("http://127.0.0.1"):
@@ -1299,16 +1331,68 @@ def render_insights() -> None:
                         st.success("Ollama polished narrative generated.")
                     except Exception as exc:
                         st.error(f"Ollama polishing failed: {exc}")
-        polished = st.session_state.get("ollama_polished_narrative", "")
-        if polished and st.session_state.get("ollama_polished_key") == cache_key:
+        elif provider == "Groq API (user key)":
+            st.info("Groq works in deployed Streamlit. Enter your own key or set GROQ_API_KEY in Streamlit secrets. API usage may incur token costs beyond free limits.")
+            g1, g2, g3 = st.columns([1.2, 1.2, .8])
+            groq_model = g1.selectbox("Groq model", GROQ_MODEL_OPTIONS, index=0, key="groq_model")
+            groq_key = g2.text_input("Groq API key", value=os.getenv("GROQ_API_KEY", ""), type="password", key="groq_api_key")
+            groq_timeout = g3.number_input("Timeout sec", 30, 600, 180, 30, key="groq_timeout")
+            groq_records = st.slider("Records sent to Groq", 1, min(30, len(narrative_df)), min(8, len(narrative_df)), key="groq_records")
+            cache_key = f"{scope}|{ranking}|{top_n}|groq|{groq_model}|{groq_records}|{hash(narrative)}"
+            if st.button("Polish narrative with Groq", type="primary", key="groq_polish_btn"):
+                with st.spinner("Asking Groq to polish the narrative..."):
+                    try:
+                        polished = polish_narrative_with_groq(
+                            narrative,
+                            narrative_df,
+                            narrative_focus,
+                            api_key=groq_key,
+                            model=groq_model,
+                            timeout=int(groq_timeout),
+                            max_records=int(groq_records),
+                        )
+                        st.session_state["ai_polished_narrative"] = polished
+                        st.session_state["ai_polished_key"] = cache_key
+                        st.success("Groq-polished narrative generated.")
+                    except Exception as exc:
+                        st.error(f"Groq polishing failed: {exc}")
+        else:
+            st.info("Gemini works in deployed Streamlit. Enter your own key or set GEMINI_API_KEY in Streamlit secrets. Check Google AI Studio terms before sending sensitive text.")
+            m1, m2, m3 = st.columns([1.2, 1.2, .8])
+            gemini_model = m1.selectbox("Gemini model", GEMINI_MODEL_OPTIONS, index=0, key="gemini_model")
+            gemini_key = m2.text_input("Gemini API key", value=os.getenv("GEMINI_API_KEY", ""), type="password", key="gemini_api_key")
+            gemini_timeout = m3.number_input("Timeout sec", 30, 600, 180, 30, key="gemini_timeout")
+            gemini_records = st.slider("Records sent to Gemini", 1, min(30, len(narrative_df)), min(8, len(narrative_df)), key="gemini_records")
+            cache_key = f"{scope}|{ranking}|{top_n}|gemini|{gemini_model}|{gemini_records}|{hash(narrative)}"
+            if st.button("Polish narrative with Gemini", type="primary", key="gemini_polish_btn"):
+                with st.spinner("Asking Gemini to polish the narrative..."):
+                    try:
+                        polished = polish_narrative_with_gemini(
+                            narrative,
+                            narrative_df,
+                            narrative_focus,
+                            api_key=gemini_key,
+                            model=gemini_model,
+                            timeout=int(gemini_timeout),
+                            max_records=int(gemini_records),
+                        )
+                        st.session_state["ai_polished_narrative"] = polished
+                        st.session_state["ai_polished_key"] = cache_key
+                        st.success("Gemini-polished narrative generated.")
+                    except Exception as exc:
+                        st.error(f"Gemini polishing failed: {exc}")
+        legacy_polished = st.session_state.get("ollama_polished_narrative", "")
+        polished = st.session_state.get("ai_polished_narrative", "") or legacy_polished
+        key_match = st.session_state.get("ai_polished_key") == cache_key or st.session_state.get("ollama_polished_key") == cache_key
+        if polished and key_match:
             st.markdown("##### Polished narrative")
             st.markdown(polished)
             st.download_button(
-                "Download Ollama-polished review",
+                "Download AI-polished review",
                 polished,
-                "ollama_polished_literature_review.md",
+                "ai_polished_literature_review.md",
                 "text/markdown",
-                key="ollama_polished_download",
+                key="ai_polished_download",
             )
 
     st.markdown("#### Expandable paper summary cards")
@@ -1450,6 +1534,28 @@ def fetch_ollama_models(host: str = "http://localhost:11434", timeout: int = 5) 
         return []
 
 
+def build_polish_prompt(narrative: str, summary_df: pd.DataFrame, focus: str, max_records: int = 20) -> str:
+    evidence = ollama_payload_from_summary(summary_df, focus, max_records=max_records)
+    return f"""Rewrite the draft literature review into a polished, continuous scientific narrative.
+
+Rules:
+- Preserve every citation marker exactly, such as [1], [2], [3].
+- Put citations immediately after the sentence they support.
+- Do not invent facts, methods, results, authors, journals, years, or citations.
+- Use only the evidence provided below.
+- Keep a References section using the same numbered references from the draft.
+- Write clear paragraphs, not bullet points.
+- Keep the tone suitable for a scientific literature review.
+- This is an abstract-level synthesis from metadata and abstracts only, not a full-PDF review.
+
+Evidence:
+{evidence}
+
+Draft review:
+{narrative}
+"""
+
+
 def polish_narrative_with_ollama(
     narrative: str,
     summary_df: pd.DataFrame,
@@ -1460,24 +1566,7 @@ def polish_narrative_with_ollama(
     timeout: int = 180,
     max_records: int = 20,
 ) -> str:
-    evidence = ollama_payload_from_summary(summary_df, focus, max_records=max_records)
-    prompt = f"""Rewrite the draft literature review into a polished, continuous scientific narrative.
-
-Rules:
-- Preserve every citation marker exactly, such as [1], [2], [3].
-- Put citations immediately after the sentence they support.
-- Do not invent facts, methods, results, authors, journals, years, or citations.
-- Use only the evidence provided below.
-- Keep a References section using the same numbered references from the draft.
-- Write clear paragraphs, not bullet points.
-- Keep the tone suitable for a scientific literature review.
-
-Evidence:
-{evidence}
-
-Draft review:
-{narrative}
-"""
+    prompt = build_polish_prompt(narrative, summary_df, focus, max_records=max_records)
     response = requests.post(
         f"{host.rstrip('/')}/api/generate",
         json={"model": model, "prompt": prompt, "stream": False},
@@ -1486,6 +1575,67 @@ Draft review:
     response.raise_for_status()
     data = response.json()
     return safe_text(data.get("response")) or narrative
+
+
+def polish_narrative_with_groq(
+    narrative: str,
+    summary_df: pd.DataFrame,
+    focus: str,
+    *,
+    api_key: str,
+    model: str = "llama-3.1-8b-instant",
+    timeout: int = 180,
+    max_records: int = 20,
+) -> str:
+    if not api_key:
+        raise ValueError("Groq API key is required.")
+    prompt = build_polish_prompt(narrative, summary_df, focus, max_records=max_records)
+    response = requests.post(
+        "https://api.groq.com/openai/v1/chat/completions",
+        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        json={
+            "model": model,
+            "messages": [
+                {"role": "system", "content": "You polish scientific literature-review text using only supplied evidence."},
+                {"role": "user", "content": prompt},
+            ],
+            "temperature": 0.2,
+            "max_tokens": 2200,
+        },
+        timeout=timeout,
+    )
+    response.raise_for_status()
+    data = response.json()
+    return safe_text(data.get("choices", [{}])[0].get("message", {}).get("content")) or narrative
+
+
+def polish_narrative_with_gemini(
+    narrative: str,
+    summary_df: pd.DataFrame,
+    focus: str,
+    *,
+    api_key: str,
+    model: str = "gemini-2.5-flash-lite",
+    timeout: int = 180,
+    max_records: int = 20,
+) -> str:
+    if not api_key:
+        raise ValueError("Gemini API key is required.")
+    prompt = build_polish_prompt(narrative, summary_df, focus, max_records=max_records)
+    response = requests.post(
+        f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+        params={"key": api_key},
+        json={
+            "contents": [{"parts": [{"text": prompt}]}],
+            "generationConfig": {"temperature": 0.2, "maxOutputTokens": 2200},
+        },
+        timeout=timeout,
+    )
+    response.raise_for_status()
+    data = response.json()
+    candidates = data.get("candidates") or []
+    parts = (((candidates[0] if candidates else {}).get("content") or {}).get("parts") or [])
+    return safe_text(" ".join(safe_text(part.get("text")) for part in parts)) or narrative
 
 
 def render_analysis() -> None:
@@ -1737,6 +1887,7 @@ def main() -> None:
         render_export()
     else:
         render_about()
+    footer()
 
 
 if __name__ == "__main__":

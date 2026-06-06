@@ -52,7 +52,7 @@ See [docs/SCREENSHOTS.md](docs/SCREENSHOTS.md) for recapturing guidance.
 - Rank top papers by relevance, hybrid score, citations, recency, metadata completeness, or current order.
 - Analytics for publication year, source, journal, theme, metadata completeness, keywords, relevance, and relevance-vs-citation comparisons.
 - Narrative literature review export with numbered citation markers and references.
-- Optional local Ollama polishing for narrative reviews.
+- Optional narrative polishing with local Ollama, Groq API, or Gemini API using user-provided keys.
 - Export CSV, JSON, BibTeX, RIS, Markdown, review briefs, and `.eml` email handoff files.
 - Multiple-recipient email draft links for default email apps, Gmail, and Outlook.
 
@@ -112,6 +112,8 @@ UNPAYWALL_EMAIL=your_email@example.com
 SERPAPI_KEY=your_serpapi_key
 ELSEVIER_API_KEY=your_elsevier_api_key
 SEMANTIC_SCHOLAR_API_KEY=your_semantic_scholar_api_key
+GROQ_API_KEY=your_groq_api_key
+GEMINI_API_KEY=your_gemini_api_key
 ```
 
 ## Metadata Sources
@@ -264,7 +266,9 @@ The default is **Relevance to theme/keywords**. Hybrid ranking combines normaliz
 
 Insights can export a continuous Markdown narrative review with numbered citation markers such as `[1]`, `[2]`, and a matching references section.
 
-If Ollama is installed and running locally, the narrative can optionally be polished with a local model. The default fast model is:
+The narrative can optionally be polished with selected paper metadata and abstracts only. It does not analyze full PDFs.
+
+If Ollama is installed and running locally, the narrative can be polished with a local model. The default fast model is:
 
 ```text
 llama3.2:3b
@@ -276,7 +280,7 @@ For stronger but slower prose, try:
 qwen2.5:7b
 ```
 
-The app can load installed Ollama models into a dropdown. OpenAI and Gemini are listed as future paid-API polishing options, but local Ollama is the only connected AI provider in this version.
+The app can load installed Ollama models into a dropdown. For deployed Streamlit use, users can also enter their own **Groq** or **Gemini** API key in the app UI, or configure `GROQ_API_KEY` / `GEMINI_API_KEY` in Streamlit secrets. API polishing may incur provider token costs and should not be used with confidential, unpublished, or sensitive text unless the user accepts that provider's terms.
 
 On Streamlit Cloud, `localhost` points to the deployed cloud container, not your laptop. Local Ollama models are therefore available only when running Streamlit locally, or when you provide a reachable Ollama host URL.
 
