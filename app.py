@@ -1244,7 +1244,7 @@ def render_insights() -> None:
         st.markdown(narrative)
 
     with st.expander("Polish narrative with Ollama", expanded=False):
-        st.caption("Optional AI polishing step. Ollama requires Ollama installed, running locally, and the selected model already pulled.")
+        st.caption("Optional AI polishing step. Ollama is local-only by default: it works when this app runs on the same machine as Ollama, or when you provide a reachable Ollama host URL.")
         provider = st.selectbox(
             "AI polishing provider",
             ["Ollama local", "OpenAI API (paid, not connected)", "Gemini API (paid, not connected)"],
@@ -1257,13 +1257,15 @@ def render_insights() -> None:
         else:
             o1, o2, o3 = st.columns([1, 1.4, .8])
             ollama_host = o2.text_input("Ollama host", value="http://localhost:11434", key="ollama_host")
+            if ollama_host.startswith("http://localhost") or ollama_host.startswith("http://127.0.0.1"):
+                st.caption("Deployment note: on Streamlit Cloud, localhost points to the cloud container, not your laptop. Local Ollama models cannot be loaded there unless Ollama is exposed through a reachable private host.")
             if st.button("Load installed Ollama models", key="ollama_load_models"):
                 models = fetch_ollama_models(ollama_host)
                 if models:
                     st.session_state["ollama_models"] = models
                     st.success(f"Loaded {len(models)} Ollama model(s).")
                 else:
-                    st.warning("Could not load models. Check that Ollama is installed and running.")
+                    st.warning("Could not load Ollama models from this host. If this app is deployed, local Ollama on your laptop is not reachable from Streamlit Cloud. Use local Streamlit for Ollama, provide a reachable Ollama host, or skip AI polishing.")
             model_options = st.session_state.get("ollama_models") or OLLAMA_MODEL_OPTIONS
             if "llama3.2:3b" in model_options:
                 default_model_idx = model_options.index("llama3.2:3b")

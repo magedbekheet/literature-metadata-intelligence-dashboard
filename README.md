@@ -278,6 +278,8 @@ qwen2.5:7b
 
 The app can load installed Ollama models into a dropdown. OpenAI and Gemini are listed as future paid-API polishing options, but local Ollama is the only connected AI provider in this version.
 
+On Streamlit Cloud, `localhost` points to the deployed cloud container, not your laptop. Local Ollama models are therefore available only when running Streamlit locally, or when you provide a reachable Ollama host URL.
+
 ## Validation
 
 ```bash
