@@ -448,14 +448,27 @@ def _unique_queries(*values: str) -> List[str]:
     for value in values:
         value = " ".join(safe_text(value).split())
         candidates = [value]
-        if re.search(r"\bOR\b|\|", value, flags=re.I):
-            candidates.extend(x.strip(" ()") for x in re.split(r"\bOR\b|\|", value, flags=re.I))
+        if re.search(r"\bOR\b|\||,|;", value, flags=re.I):
+            candidates.extend(x.strip(" ()") for x in re.split(r"\bOR\b|\||,|;", value, flags=re.I))
         for candidate in candidates:
             candidate = " ".join(safe_text(candidate).split())
             if candidate and candidate.lower() not in seen:
                 out.append(candidate)
                 seen.add(candidate.lower())
     return out
+
+
+def _topic_queries(query: str, fallback: str = "") -> List[str]:
+    queries = _unique_queries(query)
+    if queries:
+        return queries
+    fallback = safe_text(fallback)
+    return [fallback] if fallback else []
+
+
+def _rows_for_topics(total_rows: int, topic_count: int) -> int:
+    topic_count = max(int(topic_count), 1)
+    return max(1, int((int(total_rows) + topic_count - 1) / topic_count))
 
 
 
@@ -490,6 +503,8 @@ def search_all(fields: Dict, sources: Dict[str, bool], rows_per_source: int = 25
     year_from = fields.get("year_from", "")
     year_to = fields.get("year_to", "")
     combined = " ".join(x for x in [query, title, abstract, author, journal, keywords, doi] if x)
+    topic_queries = _topic_queries(query, combined)
+    rows_per_topic = _rows_for_topics(rows_per_source, len(topic_queries))
     out: List[Dict] = []
     errors = []
 
@@ -501,8 +516,8 @@ def search_all(fields: Dict, sources: Dict[str, bool], rows_per_source: int = 25
         except Exception as exc:
             errors.append({"source": name, "error": str(exc)})
 
-    add_source("crossref", lambda: search_crossref(combined or query, title=title, author=author, journal=journal, year_from=year_from, year_to=year_to, rows=rows_per_source))
-    add_source("openalex", lambda: search_openalex(combined or query, title=title, author=author, journal=journal, year_from=year_from, year_to=year_to, rows=rows_per_source))
+    add_source("crossref", lambda: [rec for q in topic_queries for rec in search_crossref(q, title=title, author=author, journal=journal, year_from=year_from, year_to=year_to, rows=rows_per_topic)])
+    add_source("openalex", lambda: [rec for q in topic_queries for rec in search_openalex(q, title=title, author=author, journal=journal, year_from=year_from, year_to=year_to, rows=rows_per_topic)])
 
     if sources.get("semantic_scholar", False):
         try:
@@ -520,7 +535,7 @@ def search_all(fields: Dict, sources: Dict[str, bool], rows_per_source: int = 25
         except Exception as exc:
             errors.append({"source": "semantic_scholar", "error": str(exc)})
 
-    add_source("arxiv", lambda: search_arxiv(query or combined, title=title, abstract=abstract, author=author, rows=rows_per_source))
+    add_source("arxiv", lambda: [rec for q in topic_queries for rec in search_arxiv(q, title=title, abstract=abstract, author=author, rows=rows_per_topic)])
 
     # Google Scholar does not support the same structured field search as OpenAlex/Crossref.
     # Use the simplest/high-signal query to reduce blocking and improve hit rate.

@@ -970,7 +970,7 @@ def render_search() -> None:
     st.subheader("🔎 Search papers")
     st.caption("Clean default mode. Advanced source controls are hidden below for power users.")
     with st.form("search_form"):
-        q = st.text_input("Search topic", placeholder="SiOC OR silicon oxycarbide battery")
+        q = st.text_input("Search topic", placeholder="SiOC, polymer derived ceramics, SiOCN")
         cols = st.columns([1, 1, 1, 1])
         year_from = cols[0].text_input("Year from", placeholder="1992")
         year_to = cols[1].text_input("Year to", placeholder="2026")
@@ -982,7 +982,6 @@ def render_search() -> None:
             help="Balanced: OpenAlex + Crossref. Fast: OpenAlex only. Deep: optional slower sources enabled in Advanced controls.",
         )
         with st.expander("Advanced field search and sources", expanded=False):
-            global_fields = st.multiselect("Search/filter query in fields", FIELDS, default=["title", "abstract", "authors", "journal", "keywords", "doi"])
             logic = st.radio("Keyword logic", ["AND", "OR"], horizontal=True, index=1)
             c1, c2 = st.columns(2)
             title_q = c1.text_input("Title contains")
@@ -1055,7 +1054,7 @@ def render_search() -> None:
             deduped = dedupe_papers(records)
             df = to_dataframe(deduped)
             field_queries = {"title": title_q, "abstract": abstract_q, "authors": author_q, "journal": journal_q, "doi": doi_q, "keywords": keyword_q}
-            df = filter_dataframe(norm_df(df), global_query=q, global_fields=global_fields, field_queries=field_queries, logic=logic, year_from=year_from, year_to=year_to)
+            df = filter_dataframe(norm_df(df), global_query="", global_fields=None, field_queries=field_queries, logic=logic, year_from=year_from, year_to=year_to)
             st.session_state["active_df"] = df
             st.session_state["search_errors"] = errors
             st.session_state["dedupe_stats"] = dedupe_stats(len(records), deduped)
@@ -1543,22 +1542,27 @@ def render_analysis() -> None:
 
     scored_dfa = rank_papers(dfa, terms, "Relevance to theme/keywords")
     if not scored_dfa.empty:
-        scored_dfa["short_title"] = scored_dfa["title"].map(lambda x: safe_text(x)[:90])
         scored_dfa["citation_num"] = scored_dfa["citation_count"].map(numeric_value) if "citation_count" in scored_dfa else 0
         c7, c8 = st.columns(2)
-        top_relevance = scored_dfa.sort_values("_relevance_pct", ascending=False).head(15)
-        c7.plotly_chart(
-            px.bar(
-                top_relevance,
-                x="_relevance_pct",
-                y="short_title",
-                color="theme",
-                orientation="h",
-                title="Top papers by relevance to selected scope",
-                labels={"_relevance_pct": "Relevance %", "short_title": "Paper"},
-            ),
-            width="stretch",
+        top_relevance = scored_dfa.sort_values("_relevance_pct", ascending=False).head(12).copy()
+        top_relevance = top_relevance.reset_index(drop=True)
+        top_relevance["paper_label"] = top_relevance.index.map(lambda i: f"Paper {i + 1}")
+        top_relevance["short_title"] = top_relevance["title"].map(lambda x: safe_text(x)[:95] + ("..." if len(safe_text(x)) > 95 else ""))
+        relevance_fig = px.bar(
+            top_relevance.sort_values("_relevance_pct", ascending=True),
+            x="_relevance_pct",
+            y="paper_label",
+            color="theme",
+            orientation="h",
+            title="Top papers by relevance to selected scope",
+            labels={"_relevance_pct": "Matched terms (%)", "paper_label": "Paper"},
+            hover_data={"short_title": True, "_relevance_pct": ":.1f", "paper_label": False},
         )
+        relevance_fig.update_traces(text=top_relevance.sort_values("_relevance_pct", ascending=True)["_relevance_pct"].map(lambda v: f"{v:.1f}%"), textposition="outside", cliponaxis=False)
+        relevance_fig.update_layout(height=430, margin=dict(l=70, r=40, t=70, b=60), xaxis_range=[0, max(5, min(100, float(top_relevance["_relevance_pct"].max()) * 1.15))])
+        c7.plotly_chart(relevance_fig, width="stretch")
+        with c7.expander("Paper labels", expanded=False):
+            st.dataframe(top_relevance[["paper_label", "short_title", "_relevance_pct"]].rename(columns={"paper_label": "Paper", "short_title": "Title", "_relevance_pct": "Matched terms %"}), width="stretch", hide_index=True)
         c8.plotly_chart(
             px.scatter(
                 scored_dfa,

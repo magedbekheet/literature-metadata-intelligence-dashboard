@@ -42,6 +42,7 @@ See [docs/SCREENSHOTS.md](docs/SCREENSHOTS.md) for recapturing guidance.
 
 - Search scholarly metadata from OpenAlex and Crossref.
 - Optional Google Scholar local / SerpAPI and Semantic Scholar sources, with conservative limits for rate-limited APIs.
+- Multi-topic search using comma, semicolon, pipe, or `OR` separated search terms.
 - Import JSON, JSONL, CSV, BibTeX, and RIS files.
 - Deduplicate by DOI, normalized title, year, and author overlap.
 - Library-only metadata enrichment with Fast, Balanced, and Deep modes.
@@ -145,6 +146,20 @@ The app respects Semantic Scholar's introductory limit of about **1 request/seco
 
 OpenAlex and Crossref are recommended as the primary search sources. Use Semantic Scholar mainly for citation counts, abstracts, and selected metadata enrichment when extra coverage is needed.
 
+## Search Behavior
+
+The main **Search topic** field is sent to the selected scholarly sources. It is not used as a hidden exact-match filter after retrieval, because source APIs may return relevant papers whose abstracts or keywords are missing locally.
+
+You can search several topics at once:
+
+```text
+SiOC, polymer derived ceramics, SiOCN
+SiOC OR silicon oxycarbide OR SiOCN
+SiOC; polymer derived ceramics; SiOCN
+```
+
+The app splits these terms across sources and divides the `Results/source` budget across them to avoid excessive API calls. Use advanced fields such as **Title contains**, **Abstract contains**, **Topic / keywords contain**, and **DOI contains** only when you want to narrow the retrieved results.
+
 ## Import Schema
 
 Recommended metadata schema:
@@ -227,6 +242,8 @@ Each theme gets:
 - Terms used.
 - Matched-paper reasons.
 - Theme dropdown filtering in the match report.
+
+Analytics source counts use contributing sources when records are merged. A paper found by both OpenAlex and Semantic Scholar can contribute to both source counts, so source totals may exceed the displayed paper count. Top-paper relevance charts use numbered paper labels with full titles available in hover text and the label table.
 
 ## Ranking
 
