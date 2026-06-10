@@ -1004,11 +1004,16 @@ def render_search() -> None:
     st.subheader("🔎 Search papers")
     st.caption("Clean default mode. Advanced source controls are hidden below for power users.")
     with st.form("search_form"):
-        q = st.text_input("Search topic", placeholder="SiOC, polymer derived ceramics, SiOCN")
+        q = st.text_input("Search topic",
+                          placeholder="SiOC, polymer-derived ceramics, SiOCN",
+                          help=( "Search multiple keywords or phrases at once. " "Separate them with commas, semicolons, or OR. " "Examples: keyword 1, keyword 2, keyword 3 | " "keyword 1; keyword 2; keyword 3 | " "keyword 1 OR keyword 2 OR keyword 3"
+                          )
+        )
         cols = st.columns([1, 1, 1, 1])
-        year_from = cols[0].text_input("Year from", placeholder="1992")
+        year_from = cols[0].text_input("Year from", placeholder="1990")
         year_to = cols[1].text_input("Year to", placeholder="2026")
-        rows = cols[2].number_input("Results/source", 10, 1000, 100, 10)
+        rows = cols[2].number_input("Results/source", 10, 1000, 250, 10, help="Increase this number to retrieve more results from each source. Maximum: 1000 results per source due to API limits.")
+
         source_preset = cols[3].selectbox(
             "Search mode",
             ["Balanced", "Fast", "Deep"],
@@ -1016,11 +1021,11 @@ def render_search() -> None:
             help="Balanced: OpenAlex + Crossref. Fast: OpenAlex only. Deep: optional slower sources enabled in Advanced controls.",
         )
         with st.expander("Advanced field search and sources", expanded=False):
-            logic = st.radio("Keyword logic", ["AND", "OR"], horizontal=True, index=1)
+            logic = st.radio("Keyword logic", ["AND", "OR"], horizontal=True, index=1, help="OR keeps papers matching any keyword. AND keeps only papers matching all keywords.")
             c1, c2 = st.columns(2)
             title_q = c1.text_input("Title contains")
             abstract_q = c1.text_input("Abstract contains")
-            author_q = c1.text_input("Author contains")
+            author_q = c1.text_input("Author contains", placeholder="John, Smith", help="To search for a specific author, select AND above, then enter the author’s first and last name separated by a comma.")
             journal_q = c2.text_input("Journal contains")
             keyword_q = c2.text_input("Topic / keywords contain")
             doi_q = c2.text_input("DOI contains")
